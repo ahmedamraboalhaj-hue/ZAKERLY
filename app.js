@@ -529,7 +529,8 @@ function icon(name) {
 }
 
 function appLayout(content) {
-  const user = state.activeUser;
+  const account = activeAccount();
+  const user = account ? { ...state.activeUser, name: account.name } : null;
   const links = [
     ["#/teachers", "المدرسون"],
     ["#/courses", "الكورسات"],
@@ -964,16 +965,15 @@ function renderStudentArea() {
 }
 
 function renderTeacherDashboard() {
-  const teacherId = state.activeUser?.role === "teacher" ? state.activeUser.id : state.teachers[0].id;
-  const teacher = teacherById(teacherId);
-  if (!state.activeUser || state.activeUser.role !== "teacher") {
+  const teacher = teacherContext();
+  if (!teacher) {
     return `
       <section class="page">
         <div class="container">
           <div class="empty">
             <h2>لوحة المدرس تحتاج تسجيل دخول مدرس</h2>
-            <p>استخدم كود المدرس مثل ARB-2030 للدخول. يمكنك معاينة اللوحة الآن ببيانات أول مدرس.</p>
-            <div class="course-actions"><a class="btn primary" href="#/login">تسجيل دخول مدرس</a><button class="btn" data-demo-teacher="${teacherId}">معاينة اللوحة</button></div>
+            <p>سجل دخولك كمدرس حتى تظهر بيانات حسابك فقط.</p>
+            <div class="course-actions"><a class="btn primary" href="#/login/teacher">تسجيل دخول مدرس</a></div>
           </div>
         </div>
       </section>
@@ -984,9 +984,9 @@ function renderTeacherDashboard() {
 
 function dashboardView(teacher) {
   const courses = teacherCourses(teacher.id);
-  const lessons = state.lessons.filter(item => item.teacherId === teacher.id);
-  const tests = state.tests.filter(item => item.teacherId === teacher.id);
-  const codes = state.codes.filter(item => item.teacherId === teacher.id);
+  const lessons = teacherLessons(teacher.id);
+  const tests = teacherTests(teacher.id);
+  const codes = teacherCodes(teacher.id);
   const enrolledStudents = state.students.filter(student => student.enrollments.some(id => courses.some(course => course.id === id)));
   return `
     <section class="page">
@@ -1078,7 +1078,7 @@ function profilePanel(teacher) {
         <div class="profile-preview-metrics">
           <div class="stat"><strong>${teacher.stats.students}</strong><span>طالب</span></div>
           <div class="stat"><strong>${teacher.stats.rating}</strong><span>تقييم</span></div>
-          <div class="stat"><strong>${teacher.courses.length}</strong><span>كورسات</span></div>
+          <div class="stat"><strong>${teacherCourses(teacher.id).length}</strong><span>كورسات</span></div>
         </div>
       </div>
       <div class="empty profile-tip">اضغط على تعديل الصفحة الشخصية لتغيير الاسم والوصف والصورة وحجمها ومكانها.</div>
@@ -1133,18 +1133,18 @@ function coursesTable(courses) {
 function lessonsTable(lessons, courses) {
   return table(["الدرس", "الكورس", "الفيديوهات", "المرفقات", "إجراءات"], lessons.map(lesson => [
     lesson.title,
-    courseById(lesson.courseId)?.title || "",
+    courses.find(course => course.id === lesson.courseId)?.title || "",
     (lesson.videos || []).length,
     (lesson.attachments || []).length,
     rowActions("lesson", lesson.id)
   ]));
 }
 
-function testsTable(tests) {
+function testsTable(tests, courses = []) {
   return table(["الاختبار", "النوع", "الكورس", "الدرس المرتبط", "الأسئلة", "الدقائق", "إجراءات"], tests.map(test => [
     test.title,
     questionTypeLabel((test.questions || [])[0]?.type || "mcq"),
-    courseById(test.courseId)?.title || "",
+    courses.find(course => course.id === test.courseId)?.title || "",
     lessonById(test.lessonId)?.title || "",
     (test.questions || []).length,
     test.minutes,
@@ -1152,10 +1152,10 @@ function testsTable(tests) {
   ]));
 }
 
-function codesTable(codes) {
+function codesTable(codes, courses = []) {
   return table(["الكود", "الكورس", "الحالة", "الصلاحية", "الاستخدام", "إجراءات"], codes.map(code => [
     code.code,
-    courseById(code.courseId)?.title || "",
+    courses.find(course => course.id === code.courseId)?.title || "",
     code.active === false ? "متوقف" : "نشط",
     code.expires,
     `${code.used}/${code.maxUses}`,
@@ -1263,12 +1263,6 @@ function bindGlobalEvents() {
   document.querySelector("[data-recover-account]")?.addEventListener("click", openRecoveryModal);
   $("#educationSystem")?.addEventListener("change", updateGradeOptions);
   $("#gradeSelect")?.addEventListener("change", updateTrackOptions);
-  document.querySelector("[data-demo-teacher]")?.addEventListener("click", event => {
-    const teacher = teacherById(event.currentTarget.dataset.demoTeacher);
-    state.activeUser = { role: "teacher", id: teacher.id, name: teacher.name };
-    saveState();
-    render();
-  });
   bindCrudEvents();
 
   if (document.querySelector("[data-auth='teacher-register'] [data-profile-avatar-zone]")) {
@@ -1647,13 +1641,21 @@ function bindCrudEvents() {
 }
 
 function teacherContext() {
-  return state.activeUser?.role === "teacher" ? teacherById(state.activeUser.id) : null;
+  if (state.activeUser?.role !== "teacher" || !state.activeUser.id) return null;
+  return teacherById(state.activeUser.id) || null;
+}
+
+function activeAccount() {
+  if (state.activeUser?.role === "student") return currentStudent();
+  if (state.activeUser?.role === "teacher") return teacherContext();
+  return null;
 }
 
 function courseForm(id) {
   const teacher = teacherContext();
   if (!teacher) return;
   const item = id === "new" ? {} : courseById(id);
+  if (id !== "new" && (!item || item.teacherId !== teacher.id)) return toast("لا يمكن تعديل كورس مدرس آخر");
   modal(`
     <div class="modal-head"><h3>${id === "new" ? "كورس جديد" : "تعديل كورس"}</h3><button class="icon-btn" data-close-modal>${icon("close")}</button></div>
     <form class="form-grid" data-save-course="${id}">
@@ -1689,6 +1691,7 @@ function courseForm(id) {
 function saveCourse(event, id) {
   event.preventDefault();
   const teacher = teacherContext();
+  if (!teacher) return;
   const data = Object.fromEntries(new FormData(event.currentTarget));
   const price = data.type === "مجاني" ? 0 : Number(data.price || 0);
   if (id === "new") {
@@ -1714,7 +1717,7 @@ function saveCourse(event, id) {
     teacher.courses.push(course.id);
   } else {
     const course = courseById(id);
-    if (course.teacherId !== teacher.id) return toast("لا يمكن تعديل كورس مدرس آخر");
+    if (!course || course.teacherId !== teacher.id) return toast("لا يمكن تعديل كورس مدرس آخر");
     Object.assign(course, {
       title: data.title,
       headerTitle: data.headerTitle,
@@ -2006,11 +2009,14 @@ function syncLessonTestLinks(lesson, nextTestIds, nextCourseId) {
 
 function lessonForm(id) {
   const teacher = teacherContext();
+  if (!teacher) return;
   const [mode, presetCourseId = ""] = String(id).split(":");
   const isNew = mode === "new";
   const actualId = isNew ? "new" : id;
   const courses = teacherCourses(teacher.id);
+  if (presetCourseId && !teacherOwnsCourse(teacher, presetCourseId)) return toast("لا يمكن إضافة درس إلى كورس مدرس آخر");
   const item = isNew ? { courseId: presetCourseId } : state.lessons.find(row => row.id === actualId);
+  if (!isNew && (!item || item.teacherId !== teacher.id)) return toast("لا يمكن تعديل درس مدرس آخر");
   modal(`
     <div class="modal-head"><h3>${isNew ? "درس جديد" : "تعديل درس"}</h3><button class="icon-btn" data-close-modal>${icon("close")}</button></div>
     <form class="form-grid" data-save-lesson="${actualId}">
@@ -2041,31 +2047,31 @@ function lessonForm(id) {
 function saveLesson(event, id) {
   event.preventDefault();
   const teacher = teacherContext();
+  if (!teacher) return;
   const data = Object.fromEntries(new FormData(event.currentTarget));
+  const course = courseById(data.courseId);
+  if (!course || course.teacherId !== teacher.id) return toast("لا يمكن ربط الدرس بكورس مدرس آخر");
+  const linkedTest = data.testId ? state.tests.find(row => row.id === data.testId && row.teacherId === teacher.id) : null;
   const payload = {
     title: data.title,
     courseId: data.courseId,
     description: data.description,
     videos: data.videoUrl ? [{ title: data.title, description: data.description, url: data.videoUrl, embedUrl: data.videoEmbedUrl || "", bunnyVideoId: data.bunnyVideoId || "" }] : [],
     attachments: parseAttachments(data.attachments),
-    testIds: data.testId ? [data.testId] : []
+    testIds: linkedTest ? [linkedTest.id] : []
   };
   if (id === "new") {
     const lesson = { id: uid("l"), teacherId: teacher.id, ...payload };
     state.lessons.push(lesson);
-    courseById(payload.courseId).lessons.push(lesson.id);
-    if (data.testId) {
-      const test = state.tests.find(row => row.id === data.testId);
-      if (test) {
-        test.courseId = payload.courseId;
-        test.lessonId = lesson.id;
-      }
-      const course = courseById(payload.courseId);
-      if (course && !course.tests.includes(data.testId)) course.tests.push(data.testId);
+    course.lessons.push(lesson.id);
+    if (linkedTest) {
+      linkedTest.courseId = payload.courseId;
+      linkedTest.lessonId = lesson.id;
+      if (!course.tests.includes(linkedTest.id)) course.tests.push(linkedTest.id);
     }
   } else {
     const lesson = state.lessons.find(row => row.id === id);
-    if (lesson.teacherId !== teacher.id) return toast("لا يمكن تعديل درس مدرس آخر");
+    if (!lesson || lesson.teacherId !== teacher.id) return toast("لا يمكن تعديل درس مدرس آخر");
     if (lesson.courseId !== payload.courseId) {
       const oldCourse = courseById(lesson.courseId);
       if (oldCourse) oldCourse.lessons = oldCourse.lessons.filter(lessonId => lessonId !== id);
@@ -2082,7 +2088,9 @@ function saveLesson(event, id) {
 
 function testForm(id) {
   const teacher = teacherContext();
+  if (!teacher) return;
   const item = id === "new" ? {} : state.tests.find(row => row.id === id);
+  if (id !== "new" && (!item || item.teacherId !== teacher.id)) return toast("لا يمكن تعديل اختبار مدرس آخر");
   const question = normalizeQuestion((item.questions || [])[0]);
   modal(`
     <div class="modal-head"><h3>${id === "new" ? "اختبار جديد" : "تعديل اختبار"}</h3><button class="icon-btn" data-close-modal>${icon("close")}</button></div>
@@ -2133,6 +2141,7 @@ function testForm(id) {
 function saveTest(event, id) {
   event.preventDefault();
   const teacher = teacherContext();
+  if (!teacher) return;
   const data = Object.fromEntries(new FormData(event.currentTarget));
   const existing = id === "new" ? {} : state.tests.find(row => row.id === id);
   const payload = {
@@ -2147,7 +2156,7 @@ function saveTest(event, id) {
     state.tests.push(test);
   } else {
     const test = state.tests.find(row => row.id === id);
-    if (test.teacherId !== teacher.id) return toast("لا يمكن تعديل اختبار مدرس آخر");
+    if (!test || test.teacherId !== teacher.id) return toast("لا يمكن تعديل اختبار مدرس آخر");
     Object.assign(test, payload);
   }
   saveState();
@@ -2157,8 +2166,10 @@ function saveTest(event, id) {
 
 function codeForm(id) {
   const teacher = teacherContext();
+  if (!teacher) return;
   const courses = teacherCourses(teacher.id);
   const item = id === "new" ? {} : state.codes.find(row => row.id === id);
+  if (id !== "new" && (!item || item.teacherId !== teacher.id)) return toast("لا يمكن تعديل كود مدرس آخر");
   modal(`
     <div class="modal-head"><h3>${id === "new" ? "كود جديد" : "تعديل كود"}</h3><button class="icon-btn" data-close-modal>${icon("close")}</button></div>
     <form class="form-grid" data-save-code="${id}">
@@ -2184,8 +2195,9 @@ function renderCourseCodesModalContent(courseId) {
   if (!teacher) return;
   const course = courseById(courseId);
   if (!course) return;
+  if (course.teacherId !== teacher.id) return toast("لا يمكن إدارة أكواد كورس مدرس آخر");
 
-  const courseCodes = state.codes.filter(c => c.courseId === courseId);
+  const courseCodes = state.codes.filter(c => c.teacherId === teacher.id && c.courseId === courseId);
 
   const content = `
     <div class="modal-head">
@@ -2367,6 +2379,8 @@ function renderCourseCodesModalContent(courseId) {
     btn.addEventListener("click", () => {
       if (!confirm("هل تريد بالتأكيد حذف هذا الكود؟")) return;
       const codeId = btn.dataset.deleteSingle;
+      const code = state.codes.find(c => c.id === codeId);
+      if (!code || code.teacherId !== teacher.id || code.courseId !== courseId) return toast("لا يمكن حذف كود مدرس آخر");
       state.codes = state.codes.filter(c => c.id !== codeId);
       saveState();
       toast("تم حذف الكود بنجاح");
@@ -2379,14 +2393,16 @@ function renderCourseCodesModalContent(courseId) {
 function saveCode(event, id) {
   event.preventDefault();
   const teacher = teacherContext();
+  if (!teacher) return;
   const data = Object.fromEntries(new FormData(event.currentTarget));
+  if (!teacherOwnsCourse(teacher, data.courseId)) return toast("لا يمكن ربط الكود بكورس مدرس آخر");
   data.maxUses = Number(data.maxUses || 1);
   data.active = data.active === "on";
   if (id === "new") {
     state.codes.push({ id: uid("a"), teacherId: teacher.id, used: 0, ...data });
   } else {
     const code = state.codes.find(row => row.id === id);
-    if (code.teacherId !== teacher.id) return toast("لا يمكن تعديل كود مدرس آخر");
+    if (!code || code.teacherId !== teacher.id) return toast("لا يمكن تعديل كود مدرس آخر");
     Object.assign(code, data);
   }
   saveState();
@@ -2491,6 +2507,23 @@ function lessonById(id) {
 
 function teacherCourses(teacherId) {
   return state.courses.filter(course => course.teacherId === teacherId);
+}
+
+function teacherLessons(teacherId) {
+  return state.lessons.filter(lesson => lesson.teacherId === teacherId);
+}
+
+function teacherTests(teacherId) {
+  return state.tests.filter(test => test.teacherId === teacherId);
+}
+
+function teacherCodes(teacherId) {
+  return state.codes.filter(code => code.teacherId === teacherId);
+}
+
+function teacherOwnsCourse(teacher, courseId) {
+  const course = courseById(courseId);
+  return Boolean(teacher && course && course.teacherId === teacher.id);
 }
 
 function currentStudent() {
