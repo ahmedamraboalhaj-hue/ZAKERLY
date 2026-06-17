@@ -373,6 +373,8 @@ async function initializeFirebaseSync() {
       if (!snapshot.exists()) return;
       const remoteState = snapshot.data().state;
       if (!remoteState) return;
+      // لو في save pending (يعني احنا اللي عملنا التغيير دلوقتي)، اتجاهل الـ snapshot القديم
+      if (pendingRemoteSave) return;
       applyingRemoteState = true;
       state = normalizeState(remoteState);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -393,6 +395,7 @@ function queueFirebaseSave() {
   if (applyingRemoteState || !firestoreDocRef) return;
   clearTimeout(pendingRemoteSave);
   pendingRemoteSave = setTimeout(async () => {
+    pendingRemoteSave = null;
     try {
       const firestoreModule = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
       await firestoreModule.setDoc(firestoreDocRef, {
@@ -413,7 +416,14 @@ function stripRuntimeState(value) {
 }
 
 function normalizeState(value) {
-  const next = { ...clone(seed), ...value };
+  // نستخدم seed فقط للحقول الافتراضية اللي مش موجودة في القيمة المحفوظة
+  // مع الحفاظ على الـ arrays (students, teachers, codes, ...) كما هي من القيمة المحفوظة
+  const next = { ...clone(seed) };
+  for (const key of Object.keys(value)) {
+    if (value[key] !== undefined && value[key] !== null) {
+      next[key] = value[key];
+    }
+  }
   next.teachers = (next.teachers || []).map(normalizeTeacher);
   return next;
 }
